@@ -26,6 +26,7 @@ export class WsRpcClient {
   }
 
   connect() {
+    console.debug('[WsRpcClient] connect() called', { url: this.url });
     if (this.manualClose) this.manualClose = false;
 
     if (this.ws && (this.ws.readyState === CONNECTING || this.ws.readyState === OPEN)) {
@@ -40,6 +41,7 @@ export class WsRpcClient {
 
     this.connectPromise = new Promise((resolve, reject) => {
       try {
+        console.debug('[WsRpcClient] opening websocket', this.url);
         this.ws = new WebSocket(this.url);
       } catch (error) {
         this.connectPromise = null;
@@ -50,6 +52,7 @@ export class WsRpcClient {
 
       let isSettled = false;
       this.ws.onopen = () => {
+        console.debug('[WsRpcClient] websocket opened');
         this.reconnectAttempts = 0;
         this.flushQueue();
         if (!isSettled) {
@@ -59,6 +62,7 @@ export class WsRpcClient {
       };
 
       this.ws.onmessage = (event) => {
+        console.debug('[WsRpcClient] message received', event.data);
         let msg;
         try {
           msg = JSON.parse(event.data);
@@ -81,6 +85,7 @@ export class WsRpcClient {
       };
 
       this.ws.onerror = () => {
+        console.error('[WsRpcClient] websocket error');
         if (!isSettled) {
           isSettled = true;
           reject(new Error(`WS connection failed for path ${this.path}`));
@@ -88,6 +93,7 @@ export class WsRpcClient {
       };
 
       this.ws.onclose = () => {
+        console.warn('[WsRpcClient] websocket closed');
         this.connectPromise = null;
         this.ws = null;
         if (!this.manualClose) {
@@ -105,6 +111,7 @@ export class WsRpcClient {
   }
 
   call(method, params = {}) {
+    console.debug('[WsRpcClient] RPC call', { method, params });
     return new Promise((resolve, reject) => {
       const id = this.id++;
       const payload = { type: 'request', id, method, params };
@@ -117,6 +124,7 @@ export class WsRpcClient {
     const serialized = JSON.stringify(payload);
 
     if (this.ws && this.ws.readyState === OPEN) {
+      console.debug('[WsRpcClient] sending payload immediately');
       this.ws.send(serialized);
       return;
     }
@@ -147,6 +155,7 @@ export class WsRpcClient {
       }
     }
     this.queue.push({ serialized, pendingId });
+    console.debug('[WsRpcClient] queued payload', { queueSize: this.queue.length });
   }
 
   flushQueue() {
@@ -159,6 +168,7 @@ export class WsRpcClient {
         return;
       }
       this.ws.send(item.serialized);
+      console.debug('[WsRpcClient] flushed queued payload');
     }
   }
 
@@ -172,6 +182,7 @@ export class WsRpcClient {
     const delay = baseDelay + jitter;
 
     this.reconnectAttempts += 1;
+    console.warn('[WsRpcClient] reconnect scheduled', { reason, delay, attempt: this.reconnectAttempts });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect().catch(() => {

@@ -6,6 +6,7 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
   const wss = new WebSocketServer({ server, path });
 
   wss.on('connection', (socket) => {
+    logger.info('RPC client connected');
     const push = (event) => socket.readyState === socket.OPEN && socket.send(JSON.stringify(event));
     const unsubscribe = (event) => push(event);
     bot.on('event', unsubscribe);
@@ -21,6 +22,7 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
 
       if (message.type !== 'request') return;
       try {
+        logger.info({ method: message.method, params: message.params || {} }, 'RPC request');
         const result = await dispatch(message.method, message.params || {});
         socket.send(JSON.stringify(ok(message.id, result)));
       } catch (error) {
@@ -28,7 +30,10 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
       }
     });
 
-    socket.on('close', () => bot.off('event', unsubscribe));
+    socket.on('close', () => {
+      logger.info('RPC client disconnected');
+      bot.off('event', unsubscribe);
+    });
   });
 
   async function dispatch(method, params) {
@@ -36,13 +41,20 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
       case 'ping': return { pong: true };
       case 'getConfigSchema': return configSchema;
       case 'getConfig': return configStore.get();
-      case 'setConfig': return configStore.set(params);
+      case 'setConfig': {
+        const updated = configStore.set(params);
+        await bot.refreshUniverse();
+        bot.emitEvent('status', bot.getStatus());
+        return updated;
+      }
       case 'botStart': await bot.start(); return bot.getStatus();
       case 'botStop': bot.stop(); return bot.getStatus();
       case 'emergencyStop': return bot.emergencyStop(Boolean(params.closePositions));
       case 'getStatus': return bot.getStatus();
       case 'getUniverse': return bot.getUniverse();
       case 'getCandidates': return bot.getCandidates();
+      case 'getAvailableSymbols': return bot.getAvailableSymbols();
+      case 'getMarketSnapshot': return bot.getMarketSnapshot(params.symbol);
       case 'getPositions': return bot.gateway.getPositions ? bot.gateway.getPositions() : [];
       case 'getOpenOrders': return bot.gateway.getOpenOrders ? bot.gateway.getOpenOrders() : [];
       default: throw new Error(`Unknown method: ${method}`);

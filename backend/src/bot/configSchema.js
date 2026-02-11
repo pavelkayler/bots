@@ -23,6 +23,8 @@ export const configSchema = {
       id: 'execution',
       title: 'Execution & Risk',
       fields: [
+        { key: 'mode', type: 'select', options: ['paper', 'demo', 'real'], default: 'paper', advanced: false, description: 'Trading mode: paper simulation, demo API trading, or real WS routing.' },
+        { key: 'symbol', type: 'string', default: '', advanced: false, description: 'Optional symbol to force trading only one pair (e.g. BTCUSDT).' },
         { key: 'entrySplitPct', type: 'number', unit: '%', default: 50, min: 10, max: 90, step: 5, advanced: false, description: 'Percent for first entry split.' },
         { key: 'addMovePct', type: 'number', unit: '%', default: 2.5, min: 0.2, max: 10, step: 0.1, advanced: false, description: 'Adverse move percent before second entry.' },
         { key: 'slPctDefault', type: 'number', unit: '%', default: 4, min: 0.5, max: 15, step: 0.1, advanced: false, description: 'Default stop-loss percent.' },
@@ -57,6 +59,8 @@ export function validateConfig(input) {
         if (value < field.min || value > field.max) throw new Error(`${field.key} out of range`);
       }
       if (field.type === 'boolean' && typeof value !== 'boolean') throw new Error(`${field.key} must be boolean`);
+      if (field.type === 'string' && typeof value !== 'string') throw new Error(`${field.key} must be string`);
+      if (field.type === 'select' && !field.options.includes(value)) throw new Error(`${field.key} must be one of: ${field.options.join(', ')}`);
     }
   }
   return merged;
