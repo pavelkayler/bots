@@ -59,16 +59,28 @@ export class ModeGateway extends EventEmitter {
     return results;
   }
 
-  getPositions() {
-    const { gateway } = this.getActiveGateway();
+  async getPositions() {
+    const { mode, gateway } = this.getActiveGateway();
     if (!gateway?.getPositions) return [];
-    return gateway.getPositions();
+    try {
+      const positions = await gateway.getPositions();
+      return positions || [];
+    } catch (error) {
+      this.logger.warn({ mode, message: error.message }, 'getPositions failed, returning empty list');
+      return [];
+    }
   }
 
-  getOpenOrders() {
-    const { gateway } = this.getActiveGateway();
+  async getOpenOrders() {
+    const { mode, gateway } = this.getActiveGateway();
     if (!gateway?.getOpenOrders) return [];
-    return gateway.getOpenOrders();
+    try {
+      const orders = await gateway.getOpenOrders();
+      return orders || [];
+    } catch (error) {
+      this.logger.warn({ mode, message: error.message }, 'getOpenOrders failed, returning empty list');
+      return [];
+    }
   }
 
   onTick(symbol, price) {

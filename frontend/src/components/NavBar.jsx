@@ -12,7 +12,7 @@ function renderPrice(value) {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-export function AppNavBar({ wsState, prices, onConnect, onDisconnect }) {
+export function AppNavBar({ wsState, prices, mode, onConnect, onDisconnect }) {
   return (
     <Navbar bg="dark" variant="dark" expand="lg" className="mb-3" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
       <Container>
@@ -32,7 +32,7 @@ export function AppNavBar({ wsState, prices, onConnect, onDisconnect }) {
       <Container className="pb-2">
         <small>
           WS: <Badge bg={statusVariant(wsState?.status)}>{wsState?.status || 'disconnected'}</Badge>{' '}
-          URL: {wsState?.url || '/ws'}
+          URL: {wsState?.url || '/ws'} | Mode: {mode || 'unknown'}
           {wsState?.attempt ? ` | attempt=${wsState.attempt}` : ''}
           {wsState?.nextDelayMs ? ` | next=${wsState.nextDelayMs}ms` : ''}
           {wsState?.lastError ? ` | error=${wsState.lastError}` : ''}

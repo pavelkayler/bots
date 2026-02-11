@@ -49,6 +49,15 @@ const app = createHttpServer({ env, bot });
 const server = createServer(app);
 createRpcServer({ server, path: env.WS_PATH, bot, configStore, logger });
 
+process.on('unhandledRejection', (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  logger.error({ message, reason }, 'Unhandled promise rejection');
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error({ message: error.message, stack: error.stack }, 'Uncaught exception');
+});
+
 server.listen(env.PORT, () => {
   logger.info({ port: env.PORT, mode: env.TRADING_MODE, wsPath: env.WS_PATH }, 'Server started');
 });

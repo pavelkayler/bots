@@ -82,6 +82,7 @@ export default function App() {
       <AppNavBar
         wsState={wsState}
         prices={prices}
+        mode={status?.tradingMode || config?.mode || 'paper'}
         onConnect={() => rpc.connect().catch((e) => notify(e.message, 'warning'))}
         onDisconnect={() => rpc.disconnect()}
       />

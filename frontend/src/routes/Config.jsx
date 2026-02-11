@@ -7,9 +7,16 @@ export function ConfigRoute({ schema, config, rpc, notify, symbols, onConfigSave
       config={config}
       symbols={symbols}
       onSave={async (draft) => {
-        const updated = await rpc.call('setConfig', draft);
-        onConfigSaved?.(updated);
-        notify('Config saved', 'success');
+        try {
+          const updated = await rpc.call('setConfig', draft);
+          onConfigSaved?.(updated);
+          const mode = updated?.mode || draft?.mode || 'paper';
+          notify(`Mode set to ${mode}`, 'success');
+        } catch (error) {
+          const mode = draft?.mode || config?.mode || 'unknown';
+          if (mode === 'demo') notify(`Demo mode failed: ${error.message}`, 'danger');
+          else notify(`Failed to apply config for mode ${mode}: ${error.message}`, 'danger');
+        }
       }}
     />
   );

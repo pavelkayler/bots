@@ -96,8 +96,12 @@ export class WsRpcClient {
           const holder = this.pending.get(msg.id);
           if (!holder) return;
           this.pending.delete(msg.id);
-          if (msg.ok) holder.resolve(msg.result);
-          else holder.reject(new Error(msg.error || 'RPC error'));
+          if (msg.ok) {
+            holder.resolve(msg.result);
+          } else {
+            const rpcMessage = msg.error?.message || msg.error?.code || 'RPC error';
+            holder.reject(new Error(rpcMessage));
+          }
           return;
         }
 

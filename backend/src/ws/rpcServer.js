@@ -32,7 +32,8 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
         const result = await dispatch(message.method, message.params || {});
         socket.send(JSON.stringify(ok(message.id, result)));
       } catch (error) {
-        socket.send(JSON.stringify(fail(message.id, 'RPC_ERROR', error.message)));
+        logger.warn({ method: message.method, message: error.message, stack: error.stack }, 'RPC request failed');
+        socket.send(JSON.stringify(fail(message.id, 'RPC_ERROR', error.message, error.details || null)));
       }
     });
 
@@ -52,22 +53,45 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
       case 'getConfigSchema': return configSchema;
       case 'getConfig': return configStore.get();
       case 'setConfig': {
-        const updated = configStore.set(params);
-        await bot.refreshUniverse();
-        bot.emitEvent('status', bot.getStatus());
-        return updated;
+        try {
+          const updated = configStore.set(params);
+          await bot.refreshUniverse();
+          bot.emitEvent('status', bot.getStatus());
+          return updated;
+        } catch (error) {
+          logger.warn({ message: error.message, params }, 'setConfig failed without shutting down RPC server');
+          throw error;
+        }
       }
-      case 'botStart': await bot.start(); return bot.getStatus();
-      case 'botStop': bot.stop(); return bot.getStatus();
-      case 'emergencyStop': return bot.emergencyStop(Boolean(params.closePositions));
+      case 'botStart': {
+        try {
+          await bot.start();
+          return bot.getStatus();
+        } catch (error) {
+          logger.error({ message: error.message }, 'botStart failed without shutting down RPC server');
+          throw error;
+        }
+      }
+      case 'botStop': {
+        bot.stop();
+        return bot.getStatus();
+      }
+      case 'emergencyStop': {
+        try {
+          return await bot.emergencyStop(Boolean(params.closePositions));
+        } catch (error) {
+          logger.error({ message: error.message }, 'emergencyStop failed without shutting down RPC server');
+          throw error;
+        }
+      }
       case 'getStatus': return bot.getStatus();
       case 'getUniverse': return bot.getUniverse();
       case 'getCandidates': return bot.getCandidates();
       case 'getAvailableSymbols': return bot.getAvailableSymbols();
       case 'getMarketSnapshot': return bot.getMarketSnapshot(params.symbol);
       case 'getDecisionExplain': return bot.getDecisionExplain();
-      case 'getPositions': return bot.gateway.getPositions ? bot.gateway.getPositions() : [];
-      case 'getOpenOrders': return bot.gateway.getOpenOrders ? bot.gateway.getOpenOrders() : [];
+      case 'getPositions': return bot.gateway.getPositions ? await bot.gateway.getPositions() : [];
+      case 'getOpenOrders': return bot.gateway.getOpenOrders ? await bot.gateway.getOpenOrders() : [];
       default: throw new Error(`Unknown method: ${method}`);
     }
   }
