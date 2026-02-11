@@ -14,9 +14,10 @@
 
 ### Кроссплатформенный вариант через npm
 1. Скопируйте `.env.example` в `.env`.
-2. `npm install`
-3. `npm run dev`
-4. Откройте `http://localhost:5173`.
+2. `npm --prefix backend install`
+3. `npm --prefix frontend install`
+4. `npm run dev`
+5. Откройте `http://localhost:5173`.
 
 ## Dev-порты и proxy
 - Фронтенд **не подключается к Bybit напрямую**: браузер открывает только WS-RPC `/ws` на backend.
@@ -24,7 +25,7 @@
 - Backend в dev по умолчанию слушает `PORT=3000`.
 - Vite dev server слушает `5173`.
 - WebSocket path: `WS_PATH=/ws` (по умолчанию).
-- В dev фронтенд ходит по same-origin URL (например `ws://localhost:5173/ws`), а Vite проксирует `/ws` на backend (`http://localhost:${BACKEND_PORT|VITE_BACKEND_PORT|PORT|3000}`) с `ws: true`.
+- В dev фронтенд ходит по same-origin URL (например `ws://localhost:5173/ws`), а Vite проксирует `/ws` на backend (`http://${VITE_BACKEND_HOST|127.0.0.1}:${VITE_BACKEND_PORT|3000}`) с `ws: true`.
 
 ## Production
 1. `npm run build`
