@@ -283,6 +283,8 @@ export class RangeBot extends EventEmitter {
 
   getStatus() {
     const config = this.configStore.get();
+    const positionsValue = this.gateway.getPositions ? this.gateway.getPositions() : [];
+    const positionsCount = Array.isArray(positionsValue) ? positionsValue.length : 0;
     return {
       running: this.running,
       tradingMode: config.mode || this.env.TRADING_MODE,
@@ -292,7 +294,7 @@ export class RangeBot extends EventEmitter {
       symbols: this.universe.length,
       candidates: this.candidates.length,
       candidatesCount: this.candidates.length,
-      positions: this.gateway.getPositions ? this.gateway.getPositions().length : 0,
+      positions: positionsCount,
       lastSignalTime: this.lastSignalTime,
       lastDecisionTime: this.lastDecisionTime,
       gates: this.lastDecisionExplain.gates,
