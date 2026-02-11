@@ -4,10 +4,11 @@ const CLOSING = WebSocket.CLOSING;
 const CLOSED = WebSocket.CLOSED;
 
 export class WsRpcClient {
-  constructor(path = '/ws') {
+  constructor(path = import.meta.env.VITE_WS_PATH || '/ws') {
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    this.url = `${protocol}://${window.location.host}${path}`;
-    this.path = path;
+    this.url = `${protocol}://${window.location.host}${normalizedPath}`;
+    this.path = normalizedPath;
     this.id = 1;
     this.pending = new Map();
     this.listeners = new Set();
