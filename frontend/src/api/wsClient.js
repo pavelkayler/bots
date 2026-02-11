@@ -1,68 +1,90 @@
 const OPEN = WebSocket.OPEN;
 const CONNECTING = WebSocket.CONNECTING;
 const CLOSING = WebSocket.CLOSING;
-const CLOSED = WebSocket.CLOSED;
 
 export class WsRpcClient {
   constructor(path = import.meta.env.VITE_WS_PATH || '/ws') {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    this.url = `${protocol}://${window.location.host}${normalizedPath}`;
+
     this.path = normalizedPath;
+    this.url = `${protocol}://${window.location.host}${normalizedPath}`;
     this.id = 1;
     this.pending = new Map();
     this.listeners = new Set();
+    this.statusListeners = new Set();
     this.queue = [];
 
     this.ws = null;
     this.connectPromise = null;
     this.reconnectTimer = null;
-    this.manualClose = false;
-    this.reconnectAttempts = 0;
 
     this.maxQueueSize = 250;
     this.maxReconnectDelayMs = 30000;
-    this.maxReconnectAttempts = 20;
+
+    this.state = {
+      status: 'disconnected',
+      url: this.url,
+      attempt: 0,
+      nextDelayMs: null,
+      lastError: null,
+      autoReconnectEnabled: true
+    };
   }
 
-  connect() {
-    console.debug('[WsRpcClient] connect() called', { url: this.url });
-    if (this.manualClose) this.manualClose = false;
+  setState(patch) {
+    this.state = { ...this.state, ...patch };
+    for (const cb of this.statusListeners) cb(this.getState());
+  }
+
+  getState() {
+    return { ...this.state };
+  }
+
+  onStateChange(cb) {
+    this.statusListeners.add(cb);
+    cb(this.getState());
+    return () => this.statusListeners.delete(cb);
+  }
+
+  connect({ manual = true } = {}) {
+    if (manual) {
+      this.state.autoReconnectEnabled = true;
+    }
 
     if (this.ws && (this.ws.readyState === CONNECTING || this.ws.readyState === OPEN)) {
       return this.connectPromise || Promise.resolve();
     }
 
-    if (this.ws && this.ws.readyState === CLOSING) {
-      return this.connectPromise || Promise.resolve();
-    }
-
     this.clearReconnectTimer();
 
+    this.setState({ status: 'connecting', lastError: null, nextDelayMs: null });
+
     this.connectPromise = new Promise((resolve, reject) => {
+      let ws;
       try {
-        console.debug('[WsRpcClient] opening websocket', this.url);
-        this.ws = new WebSocket(this.url);
+        ws = new WebSocket(this.url);
       } catch (error) {
         this.connectPromise = null;
+        this.setState({ status: 'disconnected', lastError: error.message });
         this.scheduleReconnect('connect_error');
         reject(error);
         return;
       }
 
-      let isSettled = false;
-      this.ws.onopen = () => {
-        console.debug('[WsRpcClient] websocket opened');
-        this.reconnectAttempts = 0;
+      this.ws = ws;
+      let settled = false;
+
+      ws.onopen = () => {
+        this.setState({ status: 'connected', attempt: 0, nextDelayMs: null, lastError: null });
         this.flushQueue();
-        if (!isSettled) {
-          isSettled = true;
+        if (!settled) {
+          settled = true;
           resolve();
         }
       };
 
-      this.ws.onmessage = (event) => {
-        console.debug('[WsRpcClient] message received', event.data);
+      ws.onmessage = (event) => {
         let msg;
         try {
           msg = JSON.parse(event.data);
@@ -84,19 +106,20 @@ export class WsRpcClient {
         }
       };
 
-      this.ws.onerror = () => {
-        console.error('[WsRpcClient] websocket error');
-        if (!isSettled) {
-          isSettled = true;
-          reject(new Error(`WS connection failed for path ${this.path}`));
+      ws.onerror = () => {
+        const message = `WS connection failed for path ${this.path}`;
+        this.setState({ lastError: message });
+        if (!settled) {
+          settled = true;
+          reject(new Error(message));
         }
       };
 
-      this.ws.onclose = () => {
-        console.warn('[WsRpcClient] websocket closed');
-        this.connectPromise = null;
+      ws.onclose = () => {
         this.ws = null;
-        if (!this.manualClose) {
+        this.connectPromise = null;
+        this.setState({ status: this.state.autoReconnectEnabled ? 'reconnecting' : 'disconnected' });
+        if (this.state.autoReconnectEnabled) {
           this.scheduleReconnect('close');
         }
       };
@@ -105,13 +128,32 @@ export class WsRpcClient {
     return this.connectPromise;
   }
 
+  disconnect() {
+    this.state.autoReconnectEnabled = false;
+    this.clearReconnectTimer();
+
+    if (this.ws && (this.ws.readyState === OPEN || this.ws.readyState === CONNECTING || this.ws.readyState === CLOSING)) {
+      this.ws.close(1000, 'Manual disconnect');
+    }
+
+    this.ws = null;
+    this.connectPromise = null;
+
+    for (const [id, holder] of this.pending.entries()) {
+      this.pending.delete(id);
+      holder.reject(new Error('WS client disconnected'));
+    }
+
+    this.queue = [];
+    this.setState({ status: 'disconnected', nextDelayMs: null });
+  }
+
   onEvent(cb) {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
   }
 
   call(method, params = {}) {
-    console.debug('[WsRpcClient] RPC call', { method, params });
     return new Promise((resolve, reject) => {
       const id = this.id++;
       const payload = { type: 'request', id, method, params };
@@ -124,25 +166,19 @@ export class WsRpcClient {
     const serialized = JSON.stringify(payload);
 
     if (this.ws && this.ws.readyState === OPEN) {
-      console.debug('[WsRpcClient] sending payload immediately');
       this.ws.send(serialized);
       return;
     }
 
-    if (this.ws && this.ws.readyState === CONNECTING) {
-      this.enqueue(serialized, pendingId);
-      return;
-    }
-
-    if (this.ws && this.ws.readyState === CLOSING) {
-      this.enqueue(serialized, pendingId);
-      return;
-    }
-
     this.enqueue(serialized, pendingId);
-    this.connect().catch(() => {
-      // reconnect is scheduled in onclose/onerror
-    });
+
+    if (this.ws && this.ws.readyState === CONNECTING) return;
+
+    if (this.state.autoReconnectEnabled) {
+      this.connect({ manual: false }).catch(() => {
+        this.scheduleReconnect('send_connect_failed');
+      });
+    }
   }
 
   enqueue(serialized, pendingId) {
@@ -155,7 +191,6 @@ export class WsRpcClient {
       }
     }
     this.queue.push({ serialized, pendingId });
-    console.debug('[WsRpcClient] queued payload', { queueSize: this.queue.length });
   }
 
   flushQueue() {
@@ -168,58 +203,30 @@ export class WsRpcClient {
         return;
       }
       this.ws.send(item.serialized);
-      console.debug('[WsRpcClient] flushed queued payload');
     }
   }
 
   scheduleReconnect(reason) {
-    if (this.manualClose || this.reconnectTimer || this.reconnectAttempts >= this.maxReconnectAttempts) {
-      return;
-    }
+    if (!this.state.autoReconnectEnabled || this.reconnectTimer) return;
 
-    const baseDelay = Math.min(1000 * (2 ** this.reconnectAttempts), this.maxReconnectDelayMs);
-    const jitter = Math.floor(Math.random() * 300);
+    const attempt = this.state.attempt + 1;
+    const baseDelay = Math.min(1000 * (2 ** (attempt - 1)), this.maxReconnectDelayMs);
+    const jitter = Math.floor(Math.random() * 350);
     const delay = baseDelay + jitter;
 
-    this.reconnectAttempts += 1;
-    console.warn('[WsRpcClient] reconnect scheduled', { reason, delay, attempt: this.reconnectAttempts });
+    this.setState({ status: 'reconnecting', attempt, nextDelayMs: delay, lastError: this.state.lastError || reason });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.connect().catch(() => {
+      this.connect({ manual: false }).catch(() => {
         this.scheduleReconnect('retry_failed');
       });
     }, delay);
-
-    if (reason === 'close' && this.reconnectAttempts === this.maxReconnectAttempts) {
-      for (const [id, holder] of this.pending.entries()) {
-        this.pending.delete(id);
-        holder.reject(new Error('WS disconnected'));
-      }
-    }
   }
 
   clearReconnectTimer() {
     if (!this.reconnectTimer) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-  }
-
-  close() {
-    this.manualClose = true;
-    this.clearReconnectTimer();
-
-    if (this.ws && (this.ws.readyState === OPEN || this.ws.readyState === CONNECTING)) {
-      this.ws.close(1000, 'Manual disconnect');
-    }
-
-    this.ws = null;
-    this.connectPromise = null;
-
-    for (const [id, holder] of this.pending.entries()) {
-      this.pending.delete(id);
-      holder.reject(new Error('WS client closed'));
-    }
-
-    this.queue = [];
+    this.setState({ nextDelayMs: null });
   }
 }

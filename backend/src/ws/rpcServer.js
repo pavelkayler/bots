@@ -3,11 +3,17 @@ import { ok, fail } from './rpcProtocol.js';
 import { configSchema } from '../bot/configSchema.js';
 
 export function createRpcServer({ server, path, bot, configStore, logger }) {
-  const wss = new WebSocketServer({ server, path });
+  const wsPath = path || '/ws';
+  const wss = new WebSocketServer({ server, path: wsPath });
 
-  wss.on('connection', (socket) => {
-    logger.info('RPC client connected');
-    const push = (event) => socket.readyState === socket.OPEN && socket.send(JSON.stringify(event));
+  wss.on('connection', (socket, req) => {
+    const remoteAddress = req.socket?.remoteAddress || 'unknown';
+    logger.info({ remoteAddress, path: req.url || wsPath }, 'RPC client connected');
+
+    const push = (event) => {
+      if (socket.readyState !== socket.OPEN) return;
+      socket.send(JSON.stringify(event));
+    };
     const unsubscribe = (event) => push(event);
     bot.on('event', unsubscribe);
 
@@ -30,8 +36,12 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
       }
     });
 
-    socket.on('close', () => {
-      logger.info('RPC client disconnected');
+    socket.on('error', (error) => {
+      logger.warn({ message: error.message, remoteAddress }, 'RPC socket error');
+    });
+
+    socket.on('close', (code, reason) => {
+      logger.info({ code, reason: reason.toString() }, 'RPC client disconnected');
       bot.off('event', unsubscribe);
     });
   });
@@ -55,12 +65,17 @@ export function createRpcServer({ server, path, bot, configStore, logger }) {
       case 'getCandidates': return bot.getCandidates();
       case 'getAvailableSymbols': return bot.getAvailableSymbols();
       case 'getMarketSnapshot': return bot.getMarketSnapshot(params.symbol);
+      case 'getDecisionExplain': return bot.getDecisionExplain();
       case 'getPositions': return bot.gateway.getPositions ? bot.gateway.getPositions() : [];
       case 'getOpenOrders': return bot.gateway.getOpenOrders ? bot.gateway.getOpenOrders() : [];
       default: throw new Error(`Unknown method: ${method}`);
     }
   }
 
-  logger.info({ path }, 'RPC WebSocket server started');
+  wss.on('error', (error) => {
+    logger.error({ message: error.message }, 'RPC WebSocket server error');
+  });
+
+  logger.info({ path: wsPath }, 'RPC WebSocket server started');
   return wss;
 }

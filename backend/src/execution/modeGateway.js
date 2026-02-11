@@ -35,7 +35,12 @@ export class ModeGateway extends EventEmitter {
       gateway.tradeWs.connect();
     }
     this.logger.info({ mode, symbol: order.symbol, orderType: order.type, side: order.side }, 'Placing order via mode gateway');
-    return gateway.placeOrder(order, marketPrice);
+    try {
+      return await gateway.placeOrder(order, marketPrice);
+    } catch (error) {
+      this.logger.error({ mode, message: error.message }, 'Mode gateway placeOrder failed');
+      throw new Error(`mode=${mode}: ${error.message}`);
+    }
   }
 
   async cancelOrder(symbol, orderId) {

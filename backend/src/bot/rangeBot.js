@@ -6,6 +6,8 @@ import { evaluateCandidate } from './fsm.js';
 import { buildRiskChecks } from './risk.js';
 import { normalizePrice, normalizeQty } from '../utils/math.js';
 
+const PRICE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+
 export class RangeBot extends EventEmitter {
   constructor({ env, logger, configStore, restClient, publicWs, instrumentsCache, gateway, orderManager }) {
     super();
@@ -23,7 +25,20 @@ export class RangeBot extends EventEmitter {
     this.candidates = [];
     this.market = new Map();
     this.lastSignalTime = null;
+    this.lastDecisionTime = null;
     this.symbolCatalog = [];
+    this.lastDecisionExplain = {
+      canTrade: false,
+      reasonsBlocked: ['botStopped'],
+      candidatesTop: [],
+      lastSignal: null,
+      sizing: null,
+      mode: this.configStore.get().mode || this.env.TRADING_MODE,
+      gates: {
+        enableTrading: this.env.ENABLE_TRADING,
+        bybitEnv: this.env.BYBIT_ENV
+      }
+    };
 
     this.publicWs.onMessage((msg) => this.onPublicMessage(msg));
     if (this.gateway.on) {
@@ -36,22 +51,41 @@ export class RangeBot extends EventEmitter {
     this.emit('event', { type: 'event', topic: 'rangeMetrics', payload: { kind, ...payload, ts: Date.now() } });
   }
 
+  publishPrices() {
+    const prices = {};
+    for (const symbol of PRICE_SYMBOLS) {
+      const row = this.market.get(symbol);
+      prices[symbol] = row?.lastPrice || null;
+    }
+    this.emit('event', { type: 'event', topic: 'marketPrices', payload: { kind: 'prices', prices, ts: Date.now() } });
+  }
+
   async start() {
+    if (this.running) return;
     this.running = true;
     await this.instrumentsCache.refresh();
     this.symbolCatalog = [...this.instrumentsCache.map.keys()].sort();
     this.publicWs.connect();
     await this.refreshUniverse();
+    this.publishStatus();
     this.loop = setInterval(() => this.tick().catch((e) => this.emitEvent('error', { message: e.message })), 5000);
-    this.universeLoop = setInterval(() => this.refreshUniverse().catch(() => {}), 15 * 60 * 1000);
-    this.emitEvent('status', this.getStatus());
+    this.universeLoop = setInterval(() => this.refreshUniverse().catch((e) => this.logger.warn({ message: e.message }, 'Universe refresh failed')), 15 * 60 * 1000);
+    this.pricesLoop = setInterval(() => this.publishPrices(), 500);
+    this.emitEvent('log', { message: 'Bot started and cycle initialized' });
   }
 
   stop() {
     this.running = false;
     clearInterval(this.loop);
     clearInterval(this.universeLoop);
-    this.emitEvent('status', this.getStatus());
+    clearInterval(this.pricesLoop);
+    this.lastDecisionExplain = {
+      ...this.lastDecisionExplain,
+      canTrade: false,
+      reasonsBlocked: ['botStopped'],
+      lastDecisionTime: Date.now()
+    };
+    this.publishStatus();
   }
 
   async emergencyStop(closePositions = false) {
@@ -59,6 +93,11 @@ export class RangeBot extends EventEmitter {
     const result = await this.gateway.emergencyStop(closePositions);
     this.emitEvent('log', { message: 'Emergency stop executed', result });
     return result;
+  }
+
+  publishStatus() {
+    this.emitEvent('status', this.getStatus());
+    this.emitEvent('explain', this.getDecisionExplain());
   }
 
   async refreshUniverse() {
@@ -70,7 +109,7 @@ export class RangeBot extends EventEmitter {
       this.universe = await selectUniverse(this.restClient, config);
     }
     const topics = [];
-    for (const s of this.universe) {
+    for (const s of new Set([...this.universe, ...PRICE_SYMBOLS])) {
       topics.push(`tickers.${s}`);
       topics.push(`publicTrade.${s}`);
       topics.push(`kline.5.${s}`);
@@ -79,7 +118,7 @@ export class RangeBot extends EventEmitter {
       topics.push(`allLiquidation.${s}`);
     }
     this.publicWs.subscribe(topics);
-    this.emitEvent('status', this.getStatus());
+    this.publishStatus();
   }
 
   onPublicMessage(msg) {
@@ -97,6 +136,7 @@ export class RangeBot extends EventEmitter {
         nearResistance: Math.random() < 0.1,
         atrPct15m: Number(t.price24hPcnt || 0) * 100
       });
+      if (PRICE_SYMBOLS.includes(symbol)) this.publishPrices();
       if (this.env.TRADING_MODE === 'paper') this.gateway.onTick(symbol, Number(t.lastPrice || 0));
     }
     if (topic.startsWith('publicTrade.')) {
@@ -150,41 +190,95 @@ export class RangeBot extends EventEmitter {
     const regime = detectRegime([{ close: 1 }, { close: 1.01 }, { close: 1.02 }, { close: 1.01 }]);
     const risk = buildRiskChecks(this.env, config);
     this.candidates = [];
+
+    const reasonsBlocked = [];
+    if (this.env.ENABLE_TRADING !== '1') reasonsBlocked.push('ENABLE_TRADING=0');
+    if (!risk.canEnter) reasonsBlocked.push('risk.canEnter=false');
+
+    let lastSignal = null;
+    let sizing = null;
+
     for (const symbol of this.universe) {
       const state = this.market.get(symbol);
-      if (!state?.lastPrice) continue;
+      if (!state?.lastPrice) {
+        reasonsBlocked.push(`noMarketData:${symbol}`);
+        continue;
+      }
       const features = calcFeatures(state);
       const candidate = evaluateCandidate(symbol, features, config);
       if (!candidate) continue;
       this.candidates.push(candidate);
+      lastSignal = { symbol, side: candidate.side, why: candidate.why || 'candidateMatched' };
       this.lastSignalTime = Date.now();
       this.emitEvent('plan', { symbol, candidate, regime, risk });
       if (this.running && risk.canEnter && (!config.tradeOnlyCrab || regime.regime === 'CRAB')) {
-        await this.executeCandidate(candidate, state.lastPrice, config);
+        const result = await this.executeCandidate(candidate, state.lastPrice, config);
+        sizing = result?.sizing || sizing;
+        if (!result?.ok && result?.reason) reasonsBlocked.push(result.reason);
+      } else if (config.tradeOnlyCrab && regime.regime !== 'CRAB') {
+        reasonsBlocked.push(`regime=${regime.regime}`);
       }
     }
+
+    if (!this.candidates.length) reasonsBlocked.push('noCandidates');
+
+    this.lastDecisionTime = Date.now();
+    this.lastDecisionExplain = {
+      canTrade: reasonsBlocked.length === 0,
+      reasonsBlocked: [...new Set(reasonsBlocked)],
+      candidatesTop: this.candidates.slice(0, 5).map((c) => ({ symbol: c.symbol, side: c.side, score: c.score ?? null })),
+      lastSignal,
+      sizing,
+      lastDecisionTime: this.lastDecisionTime,
+      mode: config.mode || this.env.TRADING_MODE,
+      gates: {
+        enableTrading: this.env.ENABLE_TRADING,
+        bybitEnv: this.env.BYBIT_ENV,
+        canEnter: risk.canEnter
+      }
+    };
+
     this.emitEvent('candidates', { candidates: this.candidates });
-    this.emitEvent('status', this.getStatus());
+    this.publishStatus();
   }
 
   async executeCandidate(candidate, lastPrice, config) {
     const instrument = this.instrumentsCache.get(candidate.symbol);
     const qty = normalizeQty(1, instrument);
     const price = normalizePrice(lastPrice, instrument);
-    const orderLinkId = this.orderManager.createOrderLinkId(candidate.symbol, candidate.side, 'entry1');
-    await this.gateway.placeOrder({ symbol: candidate.symbol, side: candidate.side, type: 'Market', qty, price, orderLinkId }, lastPrice);
-
-    const stopSide = candidate.side === 'Buy' ? 'Sell' : 'Buy';
-    const slPrice = candidate.side === 'Buy' ? price * (1 - config.slPctDefault / 100) : price * (1 + config.slPctDefault / 100);
-    await this.gateway.placeOrder({
-      symbol: candidate.symbol,
-      side: stopSide,
-      type: 'Stop',
+    const sizing = {
+      notional: Number((qty * price).toFixed(6)),
       qty,
-      stopPrice: normalizePrice(slPrice, instrument),
-      reduceOnly: true,
-      orderLinkId: this.orderManager.createOrderLinkId(candidate.symbol, stopSide, 'sl')
-    }, lastPrice);
+      minQty: instrument.minQty,
+      qtyStep: instrument.qtyStep
+    };
+
+    if (!qty || qty < instrument.minQty) {
+      return { ok: false, reason: `qtyTooSmall:${candidate.symbol}`, sizing };
+    }
+
+    const orderLinkId = this.orderManager.createOrderLinkId(candidate.symbol, candidate.side, 'entry1');
+
+    try {
+      await this.gateway.placeOrder({ symbol: candidate.symbol, side: candidate.side, type: 'Market', qty, price, orderLinkId }, lastPrice);
+
+      const stopSide = candidate.side === 'Buy' ? 'Sell' : 'Buy';
+      const slPrice = candidate.side === 'Buy' ? price * (1 - config.slPctDefault / 100) : price * (1 + config.slPctDefault / 100);
+      await this.gateway.placeOrder({
+        symbol: candidate.symbol,
+        side: stopSide,
+        type: 'Stop',
+        qty,
+        stopPrice: normalizePrice(slPrice, instrument),
+        reduceOnly: true,
+        orderLinkId: this.orderManager.createOrderLinkId(candidate.symbol, stopSide, 'sl')
+      }, lastPrice);
+      return { ok: true, sizing };
+    } catch (error) {
+      this.logger.error({ message: error.message, symbol: candidate.symbol }, 'Order placement failed');
+      this.emitEvent('error', { message: `orderPlacementFailed:${candidate.symbol}:${error.message}` });
+      return { ok: false, reason: `executionError:${error.message}`, sizing };
+    }
   }
 
   getStatus() {
@@ -197,9 +291,18 @@ export class RangeBot extends EventEmitter {
       symbol: config.symbol || 'auto',
       symbols: this.universe.length,
       candidates: this.candidates.length,
+      candidatesCount: this.candidates.length,
       positions: this.gateway.getPositions ? this.gateway.getPositions().length : 0,
-      lastSignalTime: this.lastSignalTime
+      lastSignalTime: this.lastSignalTime,
+      lastDecisionTime: this.lastDecisionTime,
+      gates: this.lastDecisionExplain.gates,
+      canTrade: this.lastDecisionExplain.canTrade,
+      reasonsBlocked: this.lastDecisionExplain.reasonsBlocked
     };
+  }
+
+  getDecisionExplain() {
+    return this.lastDecisionExplain;
   }
 
   getUniverse() {

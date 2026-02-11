@@ -1,5 +1,6 @@
 import axios from 'axios';
 import crypto from 'node:crypto';
+import { isLinearUsdtPerpetual } from './symbolFilters.js';
 
 const BASES = {
   demo: 'https://api-demo.bybit.com',
@@ -37,12 +38,12 @@ export class BybitRestClient {
 
   async getInstruments() {
     const { data } = await this.http.get('/v5/market/instruments-info', { params: { category: 'linear', limit: 1000 } });
-    return data.result?.list || [];
+    return (data.result?.list || []).filter((item) => isLinearUsdtPerpetual(item));
   }
 
   async getTickers() {
     const { data } = await this.http.get('/v5/market/tickers', { params: { category: 'linear' } });
-    return data.result?.list || [];
+    return (data.result?.list || []).filter((item) => isLinearUsdtPerpetual(item));
   }
 
   async getOpenInterest(symbol, intervalTime = '15min') {
