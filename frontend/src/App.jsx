@@ -11,7 +11,7 @@ import { PositionsRoute } from './routes/Positions';
 import { LogsRoute } from './routes/Logs';
 
 export default function App() {
-  const rpc = useMemo(() => new WsRpcClient('/ws'), []);
+  const rpc = useMemo(() => new WsRpcClient(), []);
   const [status, setStatus] = useState({});
   const [schema, setSchema] = useState(null);
   const [config, setConfig] = useState(null);

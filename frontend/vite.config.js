@@ -3,16 +3,15 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const backendPort = Number(env.BACKEND_PORT || env.PORT || 3000);
+  const backendPort = Number(env.BACKEND_PORT || env.VITE_BACKEND_PORT || env.PORT || 3000);
   const backendTarget = `http://localhost:${backendPort}`;
-  const wsPath = env.WS_PATH || '/ws';
 
   return {
     plugins: [react()],
     server: {
       port: 5173,
       proxy: {
-        [wsPath]: {
+        '/ws': {
           target: backendTarget,
           ws: true,
           changeOrigin: true

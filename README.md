@@ -19,10 +19,12 @@
 4. Откройте `http://localhost:5173`.
 
 ## Dev-порты и proxy
+- Фронтенд **не подключается к Bybit напрямую**: браузер открывает только WS-RPC `/ws` на backend.
+- Подключения к Bybit WebSocket (`stream.bybit.com` и аналоги) существуют только в backend (`backend/src/bybit/publicWs.js`, `backend/src/bybit/privateTradeWs.js`).
 - Backend в dev по умолчанию слушает `PORT=3000`.
 - Vite dev server слушает `5173`.
 - WebSocket path: `WS_PATH=/ws` (по умолчанию).
-- В dev фронтенд ходит по same-origin URL (например `ws://localhost:5173/ws`), а Vite проксирует `/ws` на backend (`http://localhost:${BACKEND_PORT|PORT|3000}`) с `ws: true`.
+- В dev фронтенд ходит по same-origin URL (например `ws://localhost:5173/ws`), а Vite проксирует `/ws` на backend (`http://localhost:${BACKEND_PORT|VITE_BACKEND_PORT|PORT|3000}`) с `ws: true`.
 
 ## Production
 1. `npm run build`
