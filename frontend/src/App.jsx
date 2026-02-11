@@ -56,6 +56,7 @@ export default function App() {
       clearTimeout(timer);
       clearInterval(poll);
       unsub();
+      rpc.close();
     };
   }, [rpc]);
 
