@@ -3,15 +3,19 @@ import { StatusCard } from '../components/StatusCard';
 import { CandidatesTable } from '../components/CandidatesTable';
 import { PairMetricsCard } from '../components/PairMetricsCard';
 
-export function Dashboard({ status, candidates, rpc, notify, marketSnapshot }) {
+export function Dashboard({ status, decisionExplain, candidates, rpc, notify, marketSnapshot }) {
   const call = async (method, params) => {
-    await rpc.call(method, params);
-    notify(`${method} success`, 'success');
+    try {
+      await rpc.call(method, params);
+      notify(`${method} success`, 'success');
+    } catch (error) {
+      notify(`${method} failed: ${error.message}`, 'danger');
+    }
   };
 
   return (
     <>
-      <StatusCard status={status || {}} />
+      <StatusCard status={status || {}} explain={decisionExplain} />
       <Card className="my-3">
         <Card.Body>
           <Card.Title>Control</Card.Title>

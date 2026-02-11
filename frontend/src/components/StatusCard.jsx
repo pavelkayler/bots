@@ -1,6 +1,6 @@
 import { Card, Col, Row } from 'react-bootstrap';
 
-export function StatusCard({ status }) {
+export function StatusCard({ status, explain }) {
   const rows = [
     ['Mode', status.tradingMode],
     ['ENABLE_TRADING', status.enableTrading],
@@ -9,7 +9,8 @@ export function StatusCard({ status }) {
     ['Symbols', status.symbols],
     ['Candidates', status.candidates],
     ['Positions', status.positions],
-    ['Last signal', status.lastSignalTime ? new Date(status.lastSignalTime).toLocaleString() : '—']
+    ['Last signal', status.lastSignalTime ? new Date(status.lastSignalTime).toLocaleString() : '—'],
+    ['Last decision', status.lastDecisionTime ? new Date(status.lastDecisionTime).toLocaleString() : '—']
   ];
   return (
     <Card>
@@ -21,6 +22,11 @@ export function StatusCard({ status }) {
             <Col>{String(v ?? '—')}</Col>
           </Row>
         ))}
+        <hr />
+        <Row>
+          <Col xs={5}><strong>Почему нет сделок</strong></Col>
+          <Col>{(explain?.reasonsBlocked || []).length ? explain.reasonsBlocked.join(', ') : 'Нет блокировок'}</Col>
+        </Row>
       </Card.Body>
     </Card>
   );
