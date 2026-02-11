@@ -5,6 +5,7 @@ export function StatusCard({ status }) {
     ['Mode', status.tradingMode],
     ['ENABLE_TRADING', status.enableTrading],
     ['BYBIT_ENV', status.bybitEnv],
+    ['Symbol', status.symbol],
     ['Symbols', status.symbols],
     ['Candidates', status.candidates],
     ['Positions', status.positions],

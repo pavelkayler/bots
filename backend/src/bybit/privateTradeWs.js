@@ -38,6 +38,10 @@ export class BybitPrivateTradeWs {
       this.logger.warn('Trade WS closed');
       setTimeout(() => this.connect(), 1000);
     });
+    this.ws.on('error', (error) => {
+      this.connected = false;
+      this.logger.warn({ message: error.message }, 'Trade WS error');
+    });
   }
 
   onMessage(handler) {

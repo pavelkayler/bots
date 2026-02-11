@@ -11,6 +11,7 @@ import { InstrumentsCache } from './bybit/instrumentsCache.js';
 import { PaperGateway } from './execution/paperGateway.js';
 import { RestGateway } from './execution/restGateway.js';
 import { WsGateway } from './execution/wsGateway.js';
+import { ModeGateway } from './execution/modeGateway.js';
 import { RangeBot } from './bot/rangeBot.js';
 import { OrderManager } from './bot/orderManager.js';
 
@@ -21,17 +22,17 @@ const restClient = new BybitRestClient(env, logger);
 const publicWs = new BybitPublicWs(env, logger);
 const tradeWs = new BybitPrivateTradeWs(env, logger);
 const instrumentsCache = new InstrumentsCache(restClient, logger);
+const paperGateway = new PaperGateway(logger, configStore);
 const restGateway = new RestGateway(restClient, logger);
+const wsGateway = new WsGateway(tradeWs, restGateway, logger);
 
-let gateway;
-if (env.TRADING_MODE === 'paper' || env.ENABLE_TRADING !== '1') {
-  gateway = new PaperGateway(logger, configStore);
-} else if (env.TRADING_MODE === 'demo') {
-  gateway = restGateway;
-} else {
-  tradeWs.connect();
-  gateway = new WsGateway(tradeWs, restGateway, logger);
-}
+const gateway = new ModeGateway({
+  logger,
+  configStore,
+  paperGateway,
+  restGateway,
+  wsGateway
+});
 
 const bot = new RangeBot({
   env,

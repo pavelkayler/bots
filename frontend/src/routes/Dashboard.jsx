@@ -1,8 +1,9 @@
 import { Button, ButtonGroup, Card } from 'react-bootstrap';
 import { StatusCard } from '../components/StatusCard';
 import { CandidatesTable } from '../components/CandidatesTable';
+import { PairMetricsCard } from '../components/PairMetricsCard';
 
-export function Dashboard({ status, candidates, rpc, notify }) {
+export function Dashboard({ status, candidates, rpc, notify, marketSnapshot }) {
   const call = async (method, params) => {
     await rpc.call(method, params);
     notify(`${method} success`, 'success');
@@ -27,6 +28,7 @@ export function Dashboard({ status, candidates, rpc, notify }) {
           <CandidatesTable candidates={candidates} />
         </Card.Body>
       </Card>
+      <PairMetricsCard snapshot={marketSnapshot} />
     </>
   );
 }

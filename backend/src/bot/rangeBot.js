@@ -23,6 +23,7 @@ export class RangeBot extends EventEmitter {
     this.candidates = [];
     this.market = new Map();
     this.lastSignalTime = null;
+    this.symbolCatalog = [];
 
     this.publicWs.onMessage((msg) => this.onPublicMessage(msg));
     if (this.gateway.on) {
@@ -38,6 +39,7 @@ export class RangeBot extends EventEmitter {
   async start() {
     this.running = true;
     await this.instrumentsCache.refresh();
+    this.symbolCatalog = [...this.instrumentsCache.map.keys()].sort();
     this.publicWs.connect();
     await this.refreshUniverse();
     this.loop = setInterval(() => this.tick().catch((e) => this.emitEvent('error', { message: e.message })), 5000);
@@ -61,12 +63,19 @@ export class RangeBot extends EventEmitter {
 
   async refreshUniverse() {
     const config = this.configStore.get();
-    this.universe = await selectUniverse(this.restClient, config);
+    const selectedSymbol = String(config.symbol || '').trim().toUpperCase();
+    if (selectedSymbol) {
+      this.universe = [selectedSymbol];
+    } else {
+      this.universe = await selectUniverse(this.restClient, config);
+    }
     const topics = [];
     for (const s of this.universe) {
       topics.push(`tickers.${s}`);
       topics.push(`publicTrade.${s}`);
       topics.push(`kline.5.${s}`);
+      topics.push(`kline.15.${s}`);
+      topics.push(`kline.60.${s}`);
       topics.push(`allLiquidation.${s}`);
     }
     this.publicWs.subscribe(topics);
@@ -115,6 +124,24 @@ export class RangeBot extends EventEmitter {
       }
       this.market.set(symbol, { ...prev, liqLong15m, liqShort15m });
     }
+
+    if (topic.startsWith('kline.')) {
+      const [, interval, symbol] = topic.split('.');
+      if (!interval || !symbol) return;
+      const prev = this.market.get(symbol) || { volumes: [] };
+      const candle = Array.isArray(msg.data) ? msg.data[0] : msg.data;
+      const source = candle || {};
+      const high = Number(source.high ?? source.h ?? 0);
+      const low = Number(source.low ?? source.l ?? 0);
+      const current = Number(source.close ?? source.c ?? source.lastPrice ?? prev.lastPrice ?? 0);
+      this.market.set(symbol, {
+        ...prev,
+        kline: {
+          ...(prev.kline || {}),
+          [interval]: { high, low, current, ts: Date.now() }
+        }
+      });
+    }
   }
 
   async tick() {
@@ -161,11 +188,13 @@ export class RangeBot extends EventEmitter {
   }
 
   getStatus() {
+    const config = this.configStore.get();
     return {
       running: this.running,
-      tradingMode: this.env.TRADING_MODE,
+      tradingMode: config.mode || this.env.TRADING_MODE,
       enableTrading: this.env.ENABLE_TRADING,
       bybitEnv: this.env.BYBIT_ENV,
+      symbol: config.symbol || 'auto',
       symbols: this.universe.length,
       candidates: this.candidates.length,
       positions: this.gateway.getPositions ? this.gateway.getPositions().length : 0,
@@ -179,5 +208,27 @@ export class RangeBot extends EventEmitter {
 
   getCandidates() {
     return this.candidates;
+  }
+
+  async getAvailableSymbols() {
+    if (!this.symbolCatalog.length) {
+      await this.instrumentsCache.refresh();
+      this.symbolCatalog = [...this.instrumentsCache.map.keys()].sort();
+    }
+    return this.symbolCatalog;
+  }
+
+  getMarketSnapshot(symbol) {
+    const target = String(symbol || this.universe[0] || '').toUpperCase();
+    const row = this.market.get(target) || {};
+    return {
+      symbol: target,
+      current: row.lastPrice || null,
+      timeframes: {
+        m5: row.kline?.['5'] || null,
+        m15: row.kline?.['15'] || null,
+        h1: row.kline?.['60'] || null
+      }
+    };
   }
 }
